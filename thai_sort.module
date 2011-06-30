@@ -1,0 +1,208 @@
+<?php
+
+/**
+ * Implementation of hook_menu().
+ */
+function thai_sort_menu() {
+  $items['admin/settings/thai_sort'] = array(
+    'title' => t('Thai sort'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('thai_sort_settings'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'includes/thai_sort.admin.inc',
+  );
+  $items['admin/settings/thai_sort/flush'] = array(
+    'title' => t('Flush'),
+    'page callback' => 'thai_sort_batch',
+    'access callback' => 'user_access',
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function thai_sort_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+  switch ($op) {
+    case 'insert':
+    case 'update':
+      thai_sort_update_title($node->nid, $node->title);
+      break;
+  }
+}
+
+/**
+ * Update node Thai title.
+ */
+function thai_sort_update_title($nid, $title) {
+  return db_query("UPDATE {node} SET th_title = '%s' WHERE nid = %d", _thai_sort_sort($title), $nid);
+}
+
+/**
+ * Sort thai string.
+ */
+function _thai_sort_sort($string) {
+  return Thai2Sortable($string);
+}
+
+/**
+ * Batch callback.
+ */
+function thai_sort_batch() {
+  $total = db_result(db_query("SELECT COUNT(nid) FROM {node}"));
+  $limit = 100;
+  $rounds = ceil($total / $limit);
+  $operations = array();
+  for ($i = 0; $i < $rounds; $i++) {
+    $start = $i * $limit;
+    $operations[] = array(
+      'thai_sort_batch_process',
+      array($start, $limit, $total),
+    );
+  }
+  $batch = array(
+    'title' => t('Flush sorted title'),
+    'init_message' => t('Flush is starting'),
+    'error_message' => t('Batch has encountered an error.'),
+    'operations' => $operations,
+    'finished' => 'thai_sort_batch_finish',
+  );
+  batch_set($batch);
+  batch_process('<front>');
+}
+
+/**
+ * Batch process.
+ */
+function thai_sort_batch_process($start, $limit, $total, &$context) {
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['count'] = 0;
+    $context['sandbox']['max'] = $total;
+  }
+
+  $result = db_query("SELECT nid, title FROM {node} ORDER BY nid ASC LIMIT %d, %d", $start, $limit);
+  while ($row = db_fetch_object($result)) {
+    $title = _thai_sort_sort($row->title);
+    $context['results'][] = check_plain($row->title .' => '. $title);
+
+    thai_sort_update_title($row->nid, $row->title);
+
+    $context['sandbox']['progress']++;
+    $context['message'] = t('Now processing %node', array('%node' => $row->title));
+  }
+}
+
+/**
+ * Batch finished callback.
+ */
+function thai_sort_batch_finish($success, $results, $operations) {
+  if ($success) {
+    $message = count($results) .' processed.';
+    $message .= theme('item_list', $results);
+  }
+  else {
+    $error_operation = reset($operations);
+    $message = t('An error occurred while processing %error_operation with arguments: @arguments', array('%error_operation' => $error_operation[0], '@arguments' => print_r($error_operation[1], TRUE)));
+  }
+  drupal_set_message($message);
+}
+
+/**
+ * Implementation of hook_views_api().
+ */
+function thai_sort_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'thai_sort') .'/includes/views',
+  );
+}
+
+/**
+ * Thai sort ported 
+ *  from C++ http://linux.thai.net/~thep/tsort.html.
+ *  to PHP http://www.narisa.com/forums/index.php?showtopic=2509
+ */
+function Thai2Sortable($input) {
+  $string = utf8totis620($input);
+  $len = strlen($string);
+  $output = '';
+  $rightbuf = '';
+
+  for ($i = 0; $i < $len; $i++) {
+    $current_char = substr($string, $i, 1);
+    $next_char = substr($string, $i+1, 1);
+    if (isldvowel($current_char) && (($i + 1) != $len)) {
+      if (!isldvowel($next_char) && (!isstone($next_char))) {
+        $output .= $next_char;
+        $output .= $current_char;
+        $i++;
+      }
+    }
+    elseif (isstone($current_char)) {
+      $rightbuf .= sprintf("%02d", $len - $i);
+      $rightbuf .= $current_char;
+    }
+    else {
+      $output .= $current_char;
+    }
+  }
+
+  if (!empty($rightbuf)) {
+    $output = $output ."00". $rightbuf;
+  }
+
+  return tis620toutf8($output);
+}
+
+function isstone($c) {
+  return ((chr(0xE6) < ($c)) && (($c) < chr(0xEC)));
+}
+
+function isldvowel($c) {
+  return ((chr(0xE0) <= ($c)) && (($c) <= chr(0xE4)));
+}
+
+/**
+ * Convert character set utf8 <-> tis620
+ *  http://www.thaiseoboard.com/index.php?topic=18976.20;wap2
+ */
+function utf8totis620($string) {
+  $output = '';
+  for ($i = 0; $i < strlen($string); $i++) {
+    $c = $string[$i];
+    if (ord($string[$i]) == 224) {
+      $unicode = ord($string[$i + 2]) & 0x3F;
+      $unicode |= (ord($string[$i + 1]) & 0x3F) << 6;
+      $unicode |= (ord($string[$i]) & 0x3F) << 12;
+      $output .= chr($unicode - 0x0E00 + 0xA0);
+      $i += 2;
+    }
+    else {
+      $output .= $string[$i];
+    }
+  }
+  return $output;
+}
+
+function tis620toutf8($string) {
+  $output = '';
+  for ($i = 0; $i < strlen($string); $i++) {
+    $char = substr($string, $i, 1);
+    $val = ord($char);
+    if ($val < 0x80) {
+      $output .= $char;
+    }
+    else {
+      $unicode = 0x0E00 + $val - 0xA0;
+      $output .= chr(0xE0 | ($unicode >> 12));
+      $output .= chr(0x80 | ($unicode >> 6) & 0x3F);
+      $output .= chr(0x80 | ($unicode & 0x3F));
+    }
+  }
+  return $output;
+}
+

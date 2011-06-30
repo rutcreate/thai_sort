@@ -1,0 +1,19 @@
+<?php
+
+define('THAI_SORT_COL_NAME', 'th_title', TRUE);
+
+/**
+ * Implementation of hook_install().
+ */
+function thai_sort_install() {
+  $ret = array();
+  db_add_field($ret, 'node', THAI_SORT_COL_NAME, array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''));
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function thai_sort_uninstall() {
+  $ret = array();
+  db_drop_field($ret, 'node', THAI_SORT_COL_NAME);
+}
